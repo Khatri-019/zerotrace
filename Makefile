@@ -40,16 +40,18 @@ generate:
 	cd $(AGENT_DIR) && go generate ./loader/...
 
 agent: generate
+	mkdir -p bin
 	cd $(AGENT_DIR) && go build -o ../bin/zerotrace-agent ./...
 
 collector:
+	mkdir -p bin
 	cd $(COLLECTOR_DIR) && go build -o ../bin/zerotrace-collector ./...
 
 ui:
-	cd $(UI_DIR) && npm ci && npm run build
+	cd $(UI_DIR) && npm install && npm run build
 
 test:
-	cd $(AGENT_DIR) && go test ./test/unit/...
+	cd test/unit && go test ./...
 	cd $(COLLECTOR_DIR) && go test ./...
 
 bench:

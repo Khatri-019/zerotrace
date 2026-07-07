@@ -2,6 +2,7 @@ package reader
 
 import (
 	"context"
+	"errors"
 	"go.uber.org/zap"
 	"github.com/cilium/ebpf/ringbuf"
 )
@@ -20,7 +21,7 @@ func PollRingBuffer(ctx context.Context, reader *ringbuf.Reader, eventCh chan<- 
 
 		record, err := reader.Read()
 		if err != nil {
-			if ringbuf.IsClosed(err) {
+			if errors.Is(err, ringbuf.ErrClosed) {
 				return
 			}
 			log.Warn("ringbuf read error", zap.Error(err))

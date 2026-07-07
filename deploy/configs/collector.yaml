@@ -1,0 +1,7 @@
+ingest:
+  address: ":4317"
+api:
+  address: ":8080"
+storage:
+  data_path: "/data/badger"
+  ttl_hours: 24

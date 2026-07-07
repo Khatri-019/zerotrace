@@ -1,7 +1,6 @@
 package reader
 
 import (
-	"encoding/binary"
 	"errors"
 )
 

@@ -13,4 +13,4 @@
 
 **Build**: `make all`
 
-**Status**: Phase 1, 2, and 3 complete. Ready for Phase 4 (Collector).
+**Status**: Complete

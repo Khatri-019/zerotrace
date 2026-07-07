@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.agent
+    privileged: true
+    pid: "host"
+    network_mode: "host"
+    volumes:
+      - /sys/kernel/btf/vmlinux:/sys/kernel/btf/vmlinux:ro
+      - /sys/fs/bpf:/sys/fs/bpf
+      - /proc:/proc:ro
+      - ./deploy/configs/agent.yaml:/etc/zerotrace/agent.yaml:ro
+    depends_on:
+      - collector
+
+  collector:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.collector
+    ports:
+      - "4317:4317"
+      - "8080:8080"
+    volumes:
+      - ./deploy/configs/collector.yaml:/etc/zerotrace/collector.yaml:ro
+      - zerotrace-data:/data/badger
+
+  ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - collector
+
+volumes:
+  zerotrace-data:
