@@ -1,0 +1,42 @@
+syntax = "proto3";
+package zerotrace.v1;
+option go_package = "github.com/zerotrace/zerotrace/proto;proto";
+
+service TraceIngest {
+  rpc SendSpans (SendSpansRequest) returns (SendSpansResponse);
+  rpc StreamSpans (stream SpanBatch) returns (stream Ack);
+}
+
+message SpanBatch {
+  string agent_id = 1;
+  string host     = 2;
+  repeated Span spans = 3;
+}
+
+message Span {
+  string trace_id       = 1;
+  string span_id        = 2;
+  string parent_span_id = 3;
+  string service_name   = 4;
+  string operation_name = 5;
+  int64  start_time_ns  = 6;
+  int64  end_time_ns    = 7;
+  map<string, string> tags = 8;
+  repeated SpanLog logs    = 9;
+  SpanKind kind            = 10;
+}
+
+message SpanLog {
+  int64  timestamp_ns = 1;
+  string message      = 2;
+}
+
+enum SpanKind {
+  SPAN_KIND_UNSPECIFIED = 0;
+  SPAN_KIND_CLIENT      = 1;
+  SPAN_KIND_SERVER      = 2;
+}
+
+message SendSpansRequest  { SpanBatch batch = 1; }
+message SendSpansResponse { bool accepted = 1; }
+message Ack               { uint64 spans_accepted = 1; }
