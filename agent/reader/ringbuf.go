@@ -3,16 +3,17 @@ package reader
 import (
 	"context"
 	"errors"
-	"go.uber.org/zap"
+
 	"github.com/cilium/ebpf/ringbuf"
+	"go.uber.org/zap"
 )
 
-type RawEvent struct {
-	Data []byte
-}
-
+// PollRingBuffer reads raw bytes from the eBPF ring buffer, parses them into
+// typed RawEvents, and sends them to eventCh. It runs until ctx is cancelled
+// or the ring buffer is closed.
 func PollRingBuffer(ctx context.Context, reader *ringbuf.Reader, eventCh chan<- RawEvent, log *zap.Logger) {
 	for {
+		// Check context first to avoid blocking on Read after cancellation.
 		select {
 		case <-ctx.Done():
 			return
@@ -28,10 +29,16 @@ func PollRingBuffer(ctx context.Context, reader *ringbuf.Reader, eventCh chan<- 
 			continue
 		}
 
+		ev, err := ParseEvent(record.RawSample)
+		if err != nil {
+			log.Debug("event parse error", zap.Error(err), zap.Int("bytes", len(record.RawSample)))
+			continue
+		}
+
 		select {
-		case eventCh <- RawEvent{Data: record.RawSample}:
+		case eventCh <- *ev:
 		default:
-			log.Warn("ringbuf drops", zap.String("reason", "channel full"))
+			log.Warn("event channel full, dropping event", zap.Uint8("kind", ev.Kind))
 		}
 	}
 }

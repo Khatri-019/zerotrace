@@ -1,0 +1,32 @@
+# ── Stage 1: Build ──────────────────────────────────────────────────────────
+FROM golang:1.22-bookworm AS builder
+
+WORKDIR /build
+
+# Install eBPF build deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang llvm libbpf-dev linux-headers-generic bpftool \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy workspace files
+COPY go.work go.work.sum ./
+COPY proto/ proto/
+COPY agent/ agent/
+
+# Build agent (BPF objects are pre-compiled in loader/)
+WORKDIR /build/agent
+RUN go build -o /bin/zerotrace-agent .
+
+# ── Stage 2: Runtime ─────────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libbpf-dev bpftool ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /bin/zerotrace-agent /usr/local/bin/zerotrace-agent
+
+# Agent needs root to load BPF programs
+USER root
+
+ENTRYPOINT ["/usr/local/bin/zerotrace-agent"]

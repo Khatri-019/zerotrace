@@ -1,48 +1,116 @@
 package main
 
 import (
+	"context"
 	"net/http"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/mux"
 	"go.uber.org/zap"
+
 	"github.com/zerotrace/zerotrace/collector/api"
 	"github.com/zerotrace/zerotrace/collector/config"
+	"github.com/zerotrace/zerotrace/collector/graph"
 	"github.com/zerotrace/zerotrace/collector/ingest"
 	"github.com/zerotrace/zerotrace/collector/store"
+	proto "github.com/zerotrace/zerotrace/proto"
 )
 
 func main() {
 	log, _ := zap.NewProduction()
 	defer log.Sync()
 
+	// ── Config ──────────────────────────────────────────────────────────────
 	cfg, err := config.Load("deploy/configs/collector.yaml", log)
 	if err != nil {
 		log.Fatal("config load failed", zap.Error(err))
 	}
+	log.Info("config loaded",
+		zap.String("grpc", cfg.GRPC.Address),
+		zap.String("http", cfg.HTTP.Address),
+		zap.String("data", cfg.Storage.Path),
+	)
 
-	// Setup Storage
-	badgerStore, err := store.NewBadgerStore(cfg.Storage.DataPath, time.Duration(cfg.Storage.TTLHours)*time.Hour)
+	// ── Storage ──────────────────────────────────────────────────────────────
+	ttl := time.Duration(cfg.Retention.Hours) * time.Hour
+	badgerStore, err := store.NewBadgerStore(cfg.Storage.Path, ttl)
 	if err != nil {
-		log.Fatal("failed to init storage", zap.Error(err))
+		log.Fatal("failed to init BadgerDB", zap.Error(err))
 	}
 	defer badgerStore.Close()
 
-	// Setup gRPC Ingest
-	grpcSrv := ingest.NewGRPCServer(log)
-	srv, err := ingest.Start(cfg.Ingest.Address, grpcSrv, log)
+	traceIndex := store.NewIndex(1000)
+
+	// ── Dependency graph ────────────────────────────────────────────────────
+	depGraph := graph.NewDependencyGraph()
+
+	// ── WebSocket hub ────────────────────────────────────────────────────────
+	wsHub := api.NewHub(log)
+
+	// ── gRPC ingest server ───────────────────────────────────────────────────
+	grpcSrv := ingest.NewGRPCServer(
+		log,
+		badgerStore,
+		traceIndex,
+		depGraph,
+		func(spans []*proto.Span) { wsHub.BroadcastSpans(spans) },
+	)
+	grpcServer, err := ingest.Start(cfg.GRPC.Address, grpcSrv, log)
 	if err != nil {
 		log.Fatal("failed to start gRPC server", zap.Error(err))
 	}
-	defer srv.Stop()
+	defer grpcServer.GracefulStop()
 
-	// Setup HTTP API
+	// ── REST + WebSocket HTTP server ─────────────────────────────────────────
+	restHandler := api.NewRESTHandler(badgerStore, traceIndex, depGraph, log)
 	r := mux.NewRouter()
-	api.SetupREST(r)
-	api.SetupWebSocket(r, log)
+	api.SetupREST(r, restHandler)
+	api.SetupWebSocket(r, wsHub, log)
 
-	log.Info("collector starting", zap.String("grpc", cfg.Ingest.Address), zap.String("http", cfg.API.Address))
-	if err := http.ListenAndServe(cfg.API.Address, r); err != nil {
-		log.Fatal("http server failed", zap.Error(err))
+	httpSrv := &http.Server{
+		Addr:         cfg.HTTP.Address,
+		Handler:      r,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
+
+	// ── Graceful shutdown ────────────────────────────────────────────────────
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		log.Info("HTTP server listening", zap.String("address", cfg.HTTP.Address))
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal("HTTP server failed", zap.Error(err))
+		}
+	}()
+
+	// BadgerDB GC runs periodically in the background
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				badgerStore.RunGC()
+			}
+		}
+	}()
+
+	log.Info("zerotrace-collector ready",
+		zap.String("grpc", cfg.GRPC.Address),
+		zap.String("http", cfg.HTTP.Address),
+	)
+	<-ctx.Done()
+
+	log.Info("shutting down...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = httpSrv.Shutdown(shutdownCtx)
+	log.Info("shutdown complete")
 }

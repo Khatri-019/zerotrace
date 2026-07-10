@@ -1,0 +1,26 @@
+# ── Stage 1: Build ──────────────────────────────────────────────────────────
+FROM golang:1.22-bookworm AS builder
+
+WORKDIR /build
+
+COPY go.work go.work.sum ./
+COPY proto/ proto/
+COPY collector/ collector/
+
+WORKDIR /build/collector
+RUN go build -o /bin/zerotrace-collector .
+
+# ── Stage 2: Runtime ─────────────────────────────────────────────────────────
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /bin/zerotrace-collector /usr/local/bin/zerotrace-collector
+
+RUN mkdir -p /data/badger
+
+EXPOSE 4317 8080
+
+ENTRYPOINT ["/usr/local/bin/zerotrace-collector"]

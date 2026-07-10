@@ -4,4 +4,6 @@ use (
 	./agent
 	./collector
 	./proto
+	./test/unit
+	./test/inject
 )
